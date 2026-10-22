@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>有趣的中國文字 - 連連看</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Global Setup
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'p3-chinese-matching';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+
+        window.db = null;
+        window.auth = null;
+        window.appId = appId;
+        window.globalCloudRecords = [];
+        window.docRef = doc;
+        window.deleteDocRef = deleteDoc;
+
+        if (firebaseConfig) {
+            const app = initializeApp(firebaseConfig);
+            window.auth = getAuth(app);
+            window.db = getFirestore(app);
+
+            // Authenticate user
+            const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+            const authPromise = initialToken ? signInWithCustomToken(window.auth, initialToken) : signInAnonymously(window.auth);
+
+            authPromise.then((userCredential) => {
+                console.log("Cloud Auth success:", userCredential.user.uid);
+                // Subscribe to shared public records for real-time multiplayer / link-wide room data
+                const publicCol = collection(window.db, 'artifacts', appId, 'public', 'data', 'matching_records');
+                onSnapshot(publicCol, (snapshot) => {
+                    const records = [];
+                    snapshot.forEach(docSnap => records.push({ id: docSnap.id, ...docSnap.data() }));
+                    window.globalCloudRecords = records;
+                    if (typeof window.updateLiveLeaderboards === 'function') {
+                        window.updateLiveLeaderboards();
+                    }
+                }, (err) => console.error("Firestore snapshot error:", err));
+            }).catch(err => console.error("Cloud Auth error:", err));
+        }
+    </script>
+
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+            background: linear-gradient(135deg, #f0fdf4 0%, #e0f2fe 100%);
+        }
+        .drag-node {
+            touch-action: none;
+        }
+        .selected-left-card {
+            ring: 4px;
+            border-color: #10b981 !important;
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
+            transform: scale(1.03);
+        }
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="min-h-screen text-slate-800 flex flex-col justify-between overflow-x-hidden">
+
+    <!-- Top Header Navigation -->
+    <header class="bg-white/90 backdrop-blur border-b border-emerald-100 sticky top-0 z-30 shadow-sm">
+        <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-black text-xl shadow-md shadow-emerald-200">
+                    字
+                </div>
+                <div>
+                    <h1 class="text-lg md:text-xl font-bold text-slate-800 leading-tight">連連看：有趣的中國文字</h1>
+                    <p class="text-xs text-slate-500">香港小學中國語文 ｜ 小學三年級第一課</p>
+                </div>
+            </div>
+
+            <!-- Stats Bar (Visible during gameplay) -->
+            <div id="game-stats-bar" class="hidden flex items-center gap-3 bg-emerald-50 px-3 py-1.5 rounded-2xl border border-emerald-200">
+                <div class="text-xs md:text-sm font-medium text-slate-600">
+                    輪次：<span id="stat-round" class="font-bold text-emerald-700">1/4</span>
+                </div>
+                <div class="h-4 w-px bg-emerald-200"></div>
+                <div class="text-xs md:text-sm font-medium text-slate-600">
+                    倒數：<span id="stat-timer" class="font-bold text-emerald-600 text-base">40</span>s
+                </div>
+                <div class="h-4 w-px bg-emerald-200"></div>
+                <div class="text-xs md:text-sm font-medium text-slate-600">
+                    得分：<span id="stat-score" class="font-bold text-amber-600 text-base">0</span>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+                <button id="btn-teacher-portal" class="hidden" aria-hidden="true">
+                    <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                    教師控制台
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto px-4 py-4 w-full flex-1 flex flex-col justify-center">
+
+        <!-- SCREEN 1: Start & Login View -->
+        <section id="screen-start" class="bg-white rounded-3xl shadow-xl p-6 md:p-10 border border-slate-100 max-w-lg mx-auto w-full text-center my-auto transition-all">
+            <div class="w-20 h-20 bg-gradient-to-tr from-emerald-400 to-teal-500 rounded-3xl mx-auto flex items-center justify-center text-white text-3xl font-black shadow-lg shadow-emerald-200 mb-4 transform -rotate-3">
+                畫線
+            </div>
+            <h2 class="text-2xl md:text-3xl font-black text-slate-800 mb-2">有趣的中國文字</h2>
+            <p class="text-slate-500 text-sm mb-6">小三語文連連看配對遊戲（共 12 題，分 4 輪）</p>
+
+            <form id="start-form" onsubmit="startGame(event)" class="space-y-4 text-left">
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">學生遊戲暱稱 / 姓名</label>
+                    <input type="text" id="input-nickname" required placeholder="例如：陳小明" class="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-base font-medium">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">班級 / 房間碼（自由填寫）</label>
+                    <input type="text" id="input-room" placeholder="例如：3A 或 CLASS301" value="3A" class="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-base font-medium uppercase">
+                </div>
+
+                <div class="bg-emerald-50/80 p-4 rounded-2xl text-xs text-emerald-800 space-y-1 border border-emerald-100">
+                    <p class="font-bold">🎯 遊戲規則說明：</p>
+                    <p>• 凡擁有此連結的同學均可自由參與練習。</p>
+                    <p>• 從左邊圖片拖曳出一條線，連到右邊正確的詞語。</p>
+                    <p>• 點擊詞語旁的 🔊 按鈕，可聆聽標準香港粵語發音。</p>
+                    <p>• 第一次拖對得 10 分！若曾經拖錯則該題 0 分。</p>
+                    <p>• 每輪限時 40 秒，完成所有配對即可過關！</p>
+                </div>
+
+                <button type="submit" class="w-full py-4 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-bold rounded-2xl text-lg shadow-lg shadow-emerald-200 transition transform">
+                    🚀 開始連線配對
+                </button>
+            </form>
+        </section>
+
+        <!-- SCREEN 2: Game Interactive Arena -->
+        <section id="screen-game" class="hidden flex-1 flex flex-col justify-between relative py-2">
+            
+            <!-- Instructions Header -->
+            <div class="bg-white/90 backdrop-blur rounded-2xl p-3 mb-2 border border-slate-200/60 shadow-sm flex items-center justify-between text-xs sm:text-sm">
+                <span class="text-slate-700 font-semibold flex items-center gap-1.5">
+                    <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+                    <span class="hidden sm:inline">拖曳或點擊左右卡片進行連線配對：</span>
+                    <span class="sm:hidden">點擊或拖曳左圖至右詞連線：</span>
+                </span>
+                <span id="round-progress-indicator" class="font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full whitespace-nowrap">
+                    本輪已完成 0/3
+                </span>
+            </div>
+
+            <!-- Main Connection Arena with Drag Surface -->
+            <div id="connecting-arena" class="relative flex-1 grid grid-cols-2 gap-[40px] xs:gap-[60px] sm:gap-[120px] md:gap-[160px] min-h-[380px] select-none items-center touch-none">
+                
+                <!-- SVG Overlay for Connecting Lines -->
+                <svg id="svg-overlay" class="absolute inset-0 w-full h-full pointer-events-none z-10 overflow-visible">
+                    <defs>
+                        <linearGradient id="line-gradient-success" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stop-color="#10b981" />
+                            <stop offset="100%" stop-color="#06b6d4" />
+                        </linearGradient>
+                    </defs>
+                    <g id="svg-connected-lines"></g>
+                    <line id="svg-active-line" x1="0" y1="0" x2="0" y2="0" stroke="#3b82f6" stroke-width="4" stroke-dasharray="6,6" opacity="0" stroke-linecap="round" />
+                </svg>
+
+                <!-- Left Column: Picture Cards (3 dynamic cards) -->
+                <div id="left-column" class="flex flex-col justify-between gap-3 z-20">
+                    <!-- Dynamic Picture Cards Inserted Here -->
+                </div>
+
+                <!-- Right Column: Word Cards (3 dynamic cards) -->
+                <div id="right-column" class="flex flex-col justify-between gap-3 z-20">
+                    <!-- Dynamic Word Cards Inserted Here -->
+                </div>
+            </div>
+
+        </section>
+
+        <!-- SCREEN 3: Game Completion & Summary -->
+        <section id="screen-summary" class="hidden bg-white rounded-3xl shadow-xl p-6 md:p-8 border border-slate-100 my-auto transition-all">
+            <div class="text-center max-w-lg mx-auto mb-6">
+                <div class="w-16 h-16 bg-amber-100 text-amber-600 rounded-full mx-auto flex items-center justify-center text-3xl font-bold mb-3 shadow-inner">
+                    🏆
+                </div>
+                <h2 class="text-2xl md:text-3xl font-black text-slate-800">完成練習！太棒了！</h2>
+                <p class="text-slate-500 text-sm mt-1">你的遊戲成績總結如下：</p>
+                
+                <div class="mt-4 bg-gradient-to-r from-emerald-500 to-teal-600 text-white p-5 rounded-2xl shadow-lg shadow-emerald-100">
+                    <div class="text-xs uppercase font-semibold tracking-wider text-emerald-100">總得分 Score</div>
+                    <div class="text-4xl md:text-5xl font-black my-1">
+                        你的分數：<span id="final-total-score">100</span> / 120 分
+                    </div>
+                    <div id="final-evaluation-text" class="text-xs md:text-sm font-medium text-emerald-50 mt-1">
+                        表現卓越！對文字意思掌握得非常精準！
+                    </div>
+                </div>
+            </div>
+
+            <!-- Detailed Breakdown -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center mb-6">
+                <div class="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <div class="text-xs text-slate-400 font-medium">完成總題數</div>
+                    <div id="summary-completed-count" class="text-xl font-bold text-slate-700">12 / 12</div>
+                </div>
+                <div class="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <div class="text-xs text-slate-400 font-medium">曾拖錯題數</div>
+                    <div id="summary-wrong-count" class="text-xl font-bold text-rose-500">2 題</div>
+                </div>
+                <div class="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <div class="text-xs text-slate-400 font-medium">總作答時間</div>
+                    <div id="summary-total-time" class="text-xl font-bold text-slate-700">85 秒</div>
+                </div>
+                <div class="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <div class="text-xs text-slate-400 font-medium">得分率</div>
+                    <div id="summary-score-rate" class="text-xl font-bold text-amber-500">0%</div>
+                </div>
+            </div>
+
+            <!-- Mistake Review Section -->
+            <div class="mb-6">
+                <h3 class="text-sm font-bold text-slate-700 mb-2 flex items-center gap-1.5">
+                    <span>💡</span> 建議重溫的詞語及解釋：
+                </h3>
+                <div id="review-words-container" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    <!-- Dynamic review items -->
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex flex-col sm:flex-row gap-3">
+                <button class="hidden">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    下載個人作答 CSV 紀錄
+                </button>
+                <button onclick="restartGame()" class="flex-1 py-3.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-2xl text-sm transition flex items-center justify-center gap-1">
+                    🔄 再玩一次
+                </button>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- MODAL 1: Feedback Alert Dialog -->
+    <div id="feedback-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-200">
+        <div id="feedback-card" class="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl transform scale-95 transition-transform duration-200 border border-slate-100 text-center">
+            <div id="feedback-icon-wrapper" class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-3xl mb-3 shadow-md bg-emerald-500 text-white">
+                ✓
+            </div>
+            <h3 id="feedback-title" class="text-xl font-bold text-slate-800 mb-1">配對正確！</h3>
+            <div id="feedback-word" class="text-lg font-black text-emerald-600 mb-2">博物館</div>
+            <p id="feedback-explanation" class="text-sm text-slate-600 bg-slate-50 p-3 rounded-2xl border border-slate-100 text-left mb-4 leading-relaxed">
+                一個陳列各式各樣的物品，作永久保存及研究的場所。
+            </p>
+            <div id="feedback-score-notice" class="text-xs font-bold text-emerald-700 mb-5 bg-emerald-50 py-2 rounded-xl border border-emerald-100">
+                獲得 10 分。
+            </div>
+            <button onclick="closeFeedbackModal()" class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-2xl text-base shadow-md shadow-emerald-200 transition">
+                知道了，繼續遊戲
+            </button>
+        </div>
+    </div>
+
+    <!-- MODAL 2: Teacher Dashboard Portal -->
+    <div id="teacher-modal" class="hidden hidden fixed inset-0 bg-slate-900/50 backdrop-blur-md z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-200">
+        <div class="bg-white rounded-3xl p-6 max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-100">
+            <div class="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div>
+                    <h2 class="text-xl font-black text-slate-800">教師控制台 (Teacher Dashboard)</h2>
+                    <p class="text-xs text-slate-500">即時監控學生作答數據與詞語難點統計</p>
+                </div>
+                <button onclick="closeTeacherModal()" class="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100">
+                    ✕
+                </button>
+            </div>
+
+            <!-- Teacher Summary Filter & Controls -->
+            <div class="py-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 text-xs">
+                <div class="flex items-center gap-2">
+                    <span class="font-bold text-slate-600">房間碼過濾：</span>
+                    <input type="text" id="teacher-room-filter" value="3A" oninput="renderTeacherTable()" class="px-3 py-1.5 border border-slate-200 rounded-xl w-24 font-bold text-center">
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="exportTeacherCSV()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition flex items-center gap-1 shadow-sm">
+                        📥 匯出全班 Excel CSV 紀錄
+                    </button>
+                    <button onclick="confirmClearAllRoomRecords()" class="px-3 py-1.5 bg-rose-500 hover:bg-rose-600 text-white font-bold rounded-xl transition flex items-center gap-1 shadow-sm">
+                        🗑️ 清空目前房間紀錄
+                    </button>
+                </div>
+            </div>
+
+            <!-- Stats Overview Row -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 py-3">
+                <div class="bg-emerald-50 p-3 rounded-2xl border border-emerald-100 text-center">
+                    <div class="text-xs text-emerald-700 font-medium">總提交學生數</div>
+                    <div id="teacher-stat-students" class="text-xl font-black text-emerald-800">0 人</div>
+                </div>
+                <div class="bg-blue-50 p-3 rounded-2xl border border-blue-100 text-center">
+                    <div class="text-xs text-blue-700 font-medium">班內平均得分</div>
+                    <div id="teacher-stat-avg-score" class="text-xl font-black text-blue-800">0 分</div>
+                </div>
+                <div class="bg-purple-50 p-3 rounded-2xl border border-purple-100 text-center">
+                    <div class="text-xs text-purple-700 font-medium">平均完成時間</div>
+                    <div id="teacher-stat-avg-time" class="text-xl font-black text-purple-800">0 秒</div>
+                </div>
+                <div class="bg-rose-50 p-3 rounded-2xl border border-rose-100 text-center">
+                    <div class="text-xs text-rose-700 font-medium">最常拖錯詞語</div>
+                    <div id="teacher-stat-hardest-word" class="text-sm font-black text-rose-800 truncate">--</div>
+                </div>
+            </div>
+
+            <!-- Student Submissions Table -->
+            <div class="flex-1 overflow-y-auto my-2 border border-slate-100 rounded-2xl">
+                <table class="w-full text-left text-xs">
+                    <thead class="bg-slate-50 sticky top-0 text-slate-500 font-bold border-b border-slate-100">
+                        <tr>
+                            <th class="p-3">學生暱稱</th>
+                            <th class="p-3">完成題數</th>
+                            <th class="p-3">曾拖錯題數</th>
+                            <th class="p-3">總分</th>
+                            <th class="p-3">總耗時(秒)</th>
+                            <th class="p-3">完成時間</th>
+                            <th class="p-3 text-right">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="teacher-table-body" class="divide-y divide-slate-100 font-medium text-slate-700">
+                        <!-- Dynamic Student Rows -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pt-3 text-right text-xs text-slate-400">
+                數據已自動同步至 Google Sheet (Apps Script Cloud Endpoint)
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3: Teacher PIN Verification -->
+    <div id="teacher-pin-modal" class="hidden hidden fixed inset-0 bg-slate-900/50 backdrop-blur-md z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-200">
+        <div class="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 text-center">
+            <div class="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl mx-auto flex items-center justify-center text-xl mb-3">
+                🔒
+            </div>
+            <h3 class="text-lg font-bold text-slate-800 mb-1">教師控制台密碼</h3>
+            <p class="text-xs text-slate-500 mb-4">請輸入教師密碼以查看學生數據</p>
+            <input type="password" id="input-teacher-pin" placeholder="請輸入密碼" onkeydown="if(event.key==='Enter') verifyTeacherPin()" class="w-full px-4 py-3 rounded-2xl border border-slate-200 text-center font-mono text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-2">
+            <p id="pin-error-msg" class="text-xs text-rose-500 font-bold mb-3 hidden">❌ 密碼不正確，請重新輸入</p>
+            <div class="flex gap-2">
+                <button onclick="closeTeacherPinModal()" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-sm transition">取消</button>
+                <button onclick="verifyTeacherPin()" class="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl text-sm transition shadow-md shadow-emerald-200">確認登入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 4: Delete Confirmation Dialog -->
+    <div id="delete-confirm-modal" class="hidden hidden fixed inset-0 bg-slate-900/50 backdrop-blur-md z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-200">
+        <div class="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 text-center">
+            <div class="w-12 h-12 bg-rose-100 text-rose-600 rounded-2xl mx-auto flex items-center justify-center text-xl mb-3">
+                ⚠️
+            </div>
+            <h3 id="delete-modal-title" class="text-lg font-bold text-slate-800 mb-1">確認刪除紀錄？</h3>
+            <p id="delete-modal-desc" class="text-xs text-slate-500 mb-5">刪除後數據將不可恢復。</p>
+            <div class="flex gap-2">
+                <button onclick="closeDeleteConfirmModal()" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-sm transition">取消</button>
+                <button id="btn-confirm-delete" onclick="executeDeleteRecord()" class="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-sm transition shadow-md shadow-rose-200">確定刪除</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const APPS_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbwSGd-7igc-vYIKZ3wZoVlZDJwVLgqKKDOA8cAwv8lFLa82v8T07Al5t1QA0Z5q6fbl/exec";
+
+        // Game State Variables
+        let currentRound = 1;
+        const TOTAL_ROUNDS = 4;
+        const ITEMS_PER_ROUND = 3;
+        let totalScore = 0;
+        let completedCount = 0;
+        let wrongCount = 0;
+        let studentNickname = "";
+        let roomCode = "3A";
+        let studentRecords = [];
+        let currentItemMistakeFlags = {};
+        let currentItemAttemptCounts = {};
+        let currentItemAttemptWords = {};
+        let roundActiveItems = [];
+        let activeLeftItems = [];
+        let activeRightItems = [];
+        let currentConnectedPairs = [];
+        let isDragging = false;
+        let dragStartNode = null;
+        let selectedLeftId = null;
+        let timerInterval = null;
+        let timeLeft = 40;
+        let roundStartTime = 0;
+
+        // Custom high-definition SVG Illustrations for each Chinese vocabulary
+        const VOCABULARY_LIST = [
+           {
+    id: "museum",
+    word: "博物館",
+    explanation: "一個陳列各式各樣的物品，作永久保存及研究的場所。",
+    svgIllustration: `
+        <img
+            src="images/museum.jpg"
+            alt="博物館"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+           {
+    id: "screen",
+    word: "屏幕",
+    explanation: "泛指供投射或顯示文字、圖像的裝置。",
+    svgIllustration: `
+        <img
+            src="images/screen.png"
+            alt="屏幕"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+            {
+    id: "play",
+    word: "播放",
+    explanation: "用無線電波或聲波放送音樂、影像或傳播訊息。",
+    svgIllustration: `
+        <img
+            src="images/play.jpg"
+            alt="播放"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+            {
+    id: "round_chubby",
+    word: "圓滾滾",
+    explanation: "形容很圓。",
+    svgIllustration: `
+        <img
+            src="images/round_chubby.jpg"
+            alt="圓滾滾"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},{
+    id: "circle_mark",
+    word: "圓圈",
+    explanation: "圓形的圈子。",
+    svgIllustration: `
+        <img
+            src="images/circle_mark.jpg"
+            alt="圓圈"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+{
+    id: "puffed_bag",
+    word: "脹鼓鼓",
+    explanation: "形容凸起鼓脹的樣子。",
+    svgIllustration: `
+        <img
+            src="images/puffed_bag.jpg"
+            alt="脹鼓鼓"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+            {
+    id: "create_make",
+    word: "造",
+    explanation: "創建、創製。",
+    svgIllustration: `
+        <img
+            src="images/create_make.png"
+            alt="造"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+            {
+    id: "evolution",
+    word: "演變",
+    explanation: "指歷時較久的發展變化。",
+    svgIllustration: `
+        <img
+            src="images/evolution.png"
+            alt="演變"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+            {
+    id: "hold_hands",
+    word: "捧",
+    explanation: "用兩手托物。",
+    svgIllustration: `
+        <img
+            src="images/hold_hands.png"
+            alt="捧"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+           {
+    id: "rush_forward",
+    word: "爭先恐後",
+    explanation: "競相搶先或爭着向前，不肯落後。",
+    svgIllustration: `
+        <img
+            src="images/rush_forward.png"
+            alt="爭先恐後"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+            {
+    id: "search_lookup",
+    word: "查",
+    explanation: "翻閱、檢尋。",
+    svgIllustration: `
+        <img
+            src="images/search_lookup.jpg"
+            alt="查"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+},
+        {
+    id: "eager_cant_wait",
+    word: "迫不及待",
+    explanation: "急切地或不能自制地要採取行動，急迫得不能等待。",
+    svgIllustration: `
+        <img
+            src="images/eager_cant_wait.jpg"
+            alt="迫不及待"
+            class="w-full h-full max-h-32 object-contain"
+        >
+    `
+}
+];
+
+        function shuffle(array) {
+            const arr = [...array];
+            for (let i = arr.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        }
+
+   function speakCantonese(text) {
+    if (!("speechSynthesis" in window)) return;
+
+    // 停止任何正在播放的瀏覽器語音
+    window.speechSynthesis.cancel();
+
+    // 指定詞語：使用你準備的正確粵語錄音
+    const customAudioFiles = {
+        "播放": "audio/play.mp3",
+        "脹鼓鼓": "audio/puffed_bag.mp3"
+    };
+
+    if (customAudioFiles[text]) {
+        const audio = new Audio(customAudioFiles[text]);
+
+        audio.play().catch(error => {
+            console.warn("自訂錄音未能播放，改用瀏覽器語音：", error);
+
+            const fallbackUtterance = new SpeechSynthesisUtterance(text);
+            fallbackUtterance.lang = "zh-HK";
+            fallbackUtterance.rate = 0.9;
+            window.speechSynthesis.speak(fallbackUtterance);
+        });
+
+        return;
+    }
+
+    // 其他詞語：維持原有瀏覽器粵語朗讀
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "zh-HK";
+    utterance.rate = 0.9;
+
+    const voices = window.speechSynthesis.getVoices();
+
+    const hkVoice = voices.find(voice =>
+        voice.lang === "zh-HK" ||
+        voice.lang === "yue-Hant-HK" ||
+        voice.lang === "yue-HK" ||
+        voice.lang.includes("HK")
+    );
+
+    if (hkVoice) {
+        utterance.voice = hkVoice;
+    }
+
+    window.speechSynthesis.speak(utterance);
+}
+
+        // Timer controller
+        function startTimer() {
+            clearInterval(timerInterval);
+            timeLeft = 80;
+            roundStartTime = Date.now();
+            document.getElementById('stat-timer').textContent = timeLeft;
+
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                document.getElementById('stat-timer').textContent = timeLeft;
+                if (timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    if (currentRound < TOTAL_ROUNDS) {
+                        setupRound(currentRound + 1);
+                    } else {
+                        finishGame();
+                    }
+                }
+            }, 1000);
+        }
+
+        function startGame(e) {
+            if (e) e.preventDefault();
+            studentNickname = document.getElementById('input-nickname').value.trim();
+            roomCode = document.getElementById('input-room').value.trim().toUpperCase() || '3A';
+
+            if (!studentNickname) return;
+
+            currentRound = 1;
+            totalScore = 0;
+            completedCount = 0;
+            wrongCount = 0;
+            studentRecords = [];
+            currentItemMistakeFlags = {};
+            currentItemAttemptCounts = {};
+            currentItemAttemptWords = {};
+
+            document.getElementById('screen-start').classList.add('hidden');
+            document.getElementById('screen-game').classList.remove('hidden');
+            document.getElementById('game-stats-bar').classList.remove('hidden');
+
+            setupRound(1);
+        }
+
+        function setupRound(roundNum) {
+            currentRound = roundNum;
+            currentConnectedPairs = [];
+            selectedLeftId = null;
+            
+            const lineGroup = document.getElementById('svg-connected-lines');
+            if (lineGroup) lineGroup.innerHTML = '';
+
+            document.getElementById('stat-round').textContent = `${currentRound}/${TOTAL_ROUNDS}`;
+            document.getElementById('stat-score').textContent = totalScore;
+            document.getElementById('round-progress-indicator').textContent = `本輪已完成 0/${ITEMS_PER_ROUND}`;
+
+            const startIndex = (currentRound - 1) * ITEMS_PER_ROUND;
+            roundActiveItems = VOCABULARY_LIST.slice(startIndex, startIndex + ITEMS_PER_ROUND);
+
+            activeLeftItems = shuffle(roundActiveItems);
+            activeRightItems = shuffle(roundActiveItems);
+
+            renderRoundCards();
+            startTimer();
+        }
+
+        function renderRoundCards() {
+            const leftCol = document.getElementById('left-column');
+            const rightCol = document.getElementById('right-column');
+
+            leftCol.innerHTML = '';
+            rightCol.innerHTML = '';
+
+            activeLeftItems.forEach((item) => {
+                const card = document.createElement('div');
+                card.id = `left-card-${item.id}`;
+                card.className = "drag-node relative bg-white border-2 border-slate-200 hover:border-emerald-400 rounded-2xl md:rounded-3xl p-2 shadow-md flex items-center justify-center cursor-pointer transition transform active:scale-95 h-28 sm:h-36 md:h-40 select-none overflow-visible";
+                card.setAttribute('data-id', item.id);
+                card.setAttribute('data-side', 'left');
+
+                card.innerHTML = `
+                    <div class="w-full h-full pointer-events-none flex items-center justify-center overflow-hidden rounded-xl bg-slate-50/80 border border-slate-100 p-1">
+                        ${item.svgIllustration}
+                    </div>
+                    <div class="anchor-dot absolute -right-3 top-1/2 -translate-y-1/2 w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-emerald-500 border-2 border-white shadow-md flex items-center justify-center z-20">
+                        <div class="w-2 h-2 rounded-full bg-white"></div>
+                    </div>
+                `;
+
+                attachDragAndTapListeners(card);
+                leftCol.appendChild(card);
+            });
+
+            activeRightItems.forEach((item) => {
+                const card = document.createElement('div');
+                card.id = `right-card-${item.id}`;
+                card.className = "drag-node relative bg-white border-2 border-slate-200 hover:border-teal-400 rounded-2xl md:rounded-3xl p-2 sm:p-3 shadow-md flex flex-col items-center justify-center h-28 sm:h-36 md:h-40 select-none transition cursor-pointer";
+                card.setAttribute('data-id', item.id);
+                card.setAttribute('data-side', 'right');
+
+                card.innerHTML = `
+                    <div class="anchor-dot absolute -left-3 top-1/2 -translate-y-1/2 w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-teal-500 border-2 border-white shadow-md flex items-center justify-center z-20">
+                        <div class="w-2 h-2 rounded-full bg-white"></div>
+                    </div>
+                    <div class="text-lg sm:text-xl md:text-2xl font-black text-slate-800 tracking-wide mb-1 text-center">
+                        ${item.word}
+                    </div>
+                    <button type="button" onclick="event.stopPropagation(); speakCantonese('${item.word}')" class="px-2.5 py-0.5 sm:px-3 sm:py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 rounded-full text-[11px] sm:text-xs font-bold transition flex items-center gap-1 border border-teal-200 shadow-sm active:scale-95">
+                        🔊 聽發音
+                    </button>
+                `;
+
+                card.addEventListener('click', () => handleRightCardTap(item.id, card));
+                rightCol.appendChild(card);
+            });
+        }
+
+        function attachDragAndTapListeners(element) {
+            element.addEventListener('mousedown', handleDragStart);
+            element.addEventListener('touchstart', handleDragStart, { passive: false });
+            element.addEventListener('click', (e) => handleLeftCardTap(e, element));
+        }
+
+        function handleLeftCardTap(e, card) {
+            if (card.classList.contains('completed')) return;
+            const itemId = card.getAttribute('data-id');
+
+            document.querySelectorAll('#left-column .drag-node').forEach(el => el.classList.remove('selected-left-card'));
+
+            if (selectedLeftId === itemId) {
+                selectedLeftId = null;
+            } else {
+                selectedLeftId = itemId;
+                card.classList.add('selected-left-card');
+            }
+        }
+
+        function handleRightCardTap(rightId, rightCardEl) {
+            if (rightCardEl.classList.contains('completed')) return;
+
+            if (selectedLeftId) {
+                const leftCardEl = document.getElementById(`left-card-${selectedLeftId}`);
+                const currentLeftId = selectedLeftId;
+                selectedLeftId = null;
+                if (leftCardEl) leftCardEl.classList.remove('selected-left-card');
+
+                evaluatePairing(currentLeftId, rightId, leftCardEl, rightCardEl);
+            }
+        }
+
+        function handleDragStart(e) {
+            if (e.type === 'touchstart') e.preventDefault();
+
+            const card = e.currentTarget;
+            if (card.classList.contains('completed')) return;
+
+            const side = card.getAttribute('data-side');
+            if (side !== 'left') return;
+
+            isDragging = true;
+            const itemId = card.getAttribute('data-id');
+            const dot = card.querySelector('.anchor-dot');
+            const rect = dot.getBoundingClientRect();
+            const arenaRect = document.getElementById('connecting-arena').getBoundingClientRect();
+
+            dragStartNode = {
+                id: itemId,
+                el: card,
+                x: rect.left + rect.width / 2 - arenaRect.left,
+                y: rect.top + rect.height / 2 - arenaRect.top
+            };
+
+            const activeLine = document.getElementById('svg-active-line');
+            activeLine.setAttribute('x1', dragStartNode.x);
+            activeLine.setAttribute('y1', dragStartNode.y);
+            activeLine.setAttribute('x2', dragStartNode.x);
+            activeLine.setAttribute('y2', dragStartNode.y);
+            activeLine.setAttribute('opacity', '1');
+
+            window.addEventListener('mousemove', handleDragMove);
+            window.addEventListener('touchmove', handleDragMove, { passive: false });
+            window.addEventListener('mouseup', handleDragEnd);
+            window.addEventListener('touchend', handleDragEnd);
+        }
+
+        function handleDragMove(e) {
+            if (!isDragging || !dragStartNode) return;
+            if (e.type === 'touchmove') e.preventDefault();
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            const arenaRect = document.getElementById('connecting-arena').getBoundingClientRect();
+            const activeLine = document.getElementById('svg-active-line');
+
+            const currentX = clientX - arenaRect.left;
+            const currentY = clientY - arenaRect.top;
+
+            activeLine.setAttribute('x2', currentX);
+            activeLine.setAttribute('y2', currentY);
+        }
+
+        function handleDragEnd(e) {
+            if (!isDragging) return;
+            isDragging = false;
+
+            const activeLine = document.getElementById('svg-active-line');
+            activeLine.setAttribute('opacity', '0');
+
+            window.removeEventListener('mousemove', handleDragMove);
+            window.removeEventListener('touchmove', handleDragMove);
+            window.removeEventListener('mouseup', handleDragEnd);
+            window.removeEventListener('touchend', handleDragEnd);
+
+            const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+            const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+
+            const targetElement = document.elementFromPoint(clientX, clientY);
+            if (!targetElement) return;
+
+            const rightCard = targetElement.closest('.drag-node[data-side="right"]');
+            if (rightCard && dragStartNode) {
+                const rightId = rightCard.getAttribute('data-id');
+                evaluatePairing(dragStartNode.id, rightId, dragStartNode.el, rightCard);
+            }
+            dragStartNode = null;
+        }
+
+        function drawPermanentLine(leftCardEl, rightCardEl) {
+            const leftDot = leftCardEl.querySelector('.anchor-dot');
+            const rightDot = rightCardEl.querySelector('.anchor-dot');
+
+            const arenaRect = document.getElementById('connecting-arena').getBoundingClientRect();
+            const leftRect = leftDot.getBoundingClientRect();
+            const rightRect = rightDot.getBoundingClientRect();
+
+            const x1 = leftRect.left + leftRect.width / 2 - arenaRect.left;
+            const y1 = leftRect.top + leftRect.height / 2 - arenaRect.top;
+            const x2 = rightRect.left + rightRect.width / 2 - arenaRect.left;
+            const y2 = rightRect.top + rightRect.height / 2 - arenaRect.top;
+
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute('x1', x1);
+            line.setAttribute('y1', y1);
+            line.setAttribute('x2', x2);
+            line.setAttribute('y2', y2);
+            line.setAttribute('stroke', "url(#line-gradient-success)");
+            line.setAttribute('stroke-width', "5");
+            line.setAttribute('stroke-linecap', "round");
+
+            document.getElementById('svg-connected-lines').appendChild(line);
+        }
+
+        function evaluatePairing(leftId, rightId, leftCardEl, rightCardEl) {
+            const vocabItem = VOCABULARY_LIST.find(v => v.id === leftId);
+            const selectedWordItem = VOCABULARY_LIST.find(v => v.id === rightId);
+            const qNum = (currentRound - 1) * ITEMS_PER_ROUND + (currentConnectedPairs.length + 1);
+
+            currentItemAttemptCounts[leftId] = (currentItemAttemptCounts[leftId] || 0) + 1;
+            const attemptNumber = currentItemAttemptCounts[leftId];
+
+            if (!currentItemAttemptWords[leftId]) {
+                currentItemAttemptWords[leftId] = [];
+            }
+            currentItemAttemptWords[leftId].push(selectedWordItem ? selectedWordItem.word : "未能辨識");
+
+            if (leftId === rightId) {
+                const hadWrongBefore = !!currentItemMistakeFlags[leftId];
+                const scoreAwarded = hadWrongBefore ? 0 : 10;
+                totalScore += scoreAwarded;
+                completedCount++;
+
+                const record = {
+                    record_type: "question_summary",
+                    nickname: studentNickname,
+                    room_code: roomCode,
+                    question_number: qNum,
+                    target_word: vocabItem.word,
+                    attempt_words: currentItemAttemptWords[leftId]
+                        .map((word, index) => `${index + 1}. ${word}`)
+                        .join(" → "),
+                    total_attempts: attemptNumber,
+                    final_result: "是",
+                    score_awarded: scoreAwarded,
+                    completed_at: new Date().toLocaleTimeString("zh-HK")
+                };
+
+                studentRecords.push(record);
+                sendToAppsScriptAndCloud(record);
+                drawPermanentLine(leftCardEl, rightCardEl);
+                leftCardEl.classList.remove("selected-left-card");
+                leftCardEl.classList.add("completed", "opacity-50", "pointer-events-none", "border-emerald-500");
+                rightCardEl.classList.add("completed", "opacity-50", "pointer-events-none", "border-emerald-500");
+
+                showFeedbackModal(
+                    hadWrongBefore ? " 現在配對正確！" : " 配對正確！",
+                    vocabItem.word,
+                    vocabItem.explanation,
+                    hadWrongBefore
+                        ? `你用了 ${attemptNumber} 次才答啱。這題曾經拖錯，所以得 0 分。`
+                        : "你第一次便答啱！獲得 10 分。",
+                    "bg-emerald-500 text-white",
+                    "✓"
+                );
+
+                speakCantonese("你答啱咗");
+                              currentConnectedPairs.push({ leftId, rightId });
+                document.getElementById("stat-score").textContent = totalScore;
+                document.getElementById("round-progress-indicator").textContent = `本輪已完成 ${currentConnectedPairs.length}/${ITEMS_PER_ROUND}`;
+
+                if (currentConnectedPairs.length === ITEMS_PER_ROUND) {
+                    clearInterval(timerInterval);
+                    setTimeout(() => {
+                        if (currentRound < TOTAL_ROUNDS) setupRound(currentRound + 1);
+                        else finishGame();
+                    }, 1200);
+                }
+            } else {
+                if (!currentItemMistakeFlags[leftId]) wrongCount++;
+                currentItemMistakeFlags[leftId] = true;
+
+                showFeedbackModal(
+                    " 配對未正確",
+                    `${vocabItem.word} → ${selectedWordItem ? selectedWordItem.word : "未能辨識"}`,
+                    `提示詞義：${vocabItem.explanation}`,
+                    `你唔啱啊。這是第 ${attemptNumber} 次嘗試，請再試一次。`,
+                    "bg-rose-500 text-white",
+                    "✕"
+                );
+                speakCantonese("你答錯啊 再試一次");
+            }
+        }
+
+        function showFeedbackModal(title, word, explanation, scoreNotice, iconBgClass, iconSymbol = "✓") {
+            document.getElementById("feedback-title").textContent = title;
+            document.getElementById("feedback-word").textContent = word;
+            document.getElementById("feedback-explanation").textContent = explanation;
+            document.getElementById("feedback-score-notice").textContent = scoreNotice;
+            const iconWrapper = document.getElementById("feedback-icon-wrapper");
+            iconWrapper.className = `w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-4xl font-black mb-3 shadow-md ${iconBgClass}`;
+            iconWrapper.textContent = iconSymbol;
+            const modal = document.getElementById("feedback-modal");
+            const card = document.getElementById("feedback-card");
+            modal.classList.remove("opacity-0", "pointer-events-none");
+            card.classList.remove("scale-95");
+            card.classList.add("scale-100");
+        }
+
+        function closeFeedbackModal() {
+            const modal = document.getElementById('feedback-modal');
+            const card = document.getElementById('feedback-card');
+
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            card.classList.remove('scale-100');
+            card.classList.add('scale-95');
+        }
+
+        function sendToAppsScriptAndCloud(data) {
+    if (APPS_SCRIPT_URL) {
+        fetch(APPS_SCRIPT_URL, {
+            method: "POST",
+            mode: "no-cors",
+            headers: {
+                "Content-Type": "text/plain;charset=utf-8"
+            },
+            body: JSON.stringify(data)
+        })
+        .then(() => {
+            console.log("已把遊戲紀錄送往 Google Sheet");
+        })
+        .catch((error) => {
+            console.error("Apps Script 傳送失敗：", error);
+        });
+    }
+
+    if (window.db && window.auth && window.auth.currentUser) {
+        try {
+            const publicCol = collection(
+                window.db,
+                "artifacts",
+                window.appId,
+                "public",
+                "data",
+                "matching_records"
+            );
+
+            addDoc(publicCol, {
+                ...data,
+                timestamp: Date.now()
+            }).catch(error => {
+                console.error("Firestore write error:", error);
+            });
+        } catch (error) {
+            console.error("Firestore error:", error);
+        }
+    }
+}
+
+        function saveLocalSummaryRecord(summaryRecord) {
+            const history = JSON.parse(localStorage.getItem('p3_chinese_matching_records') || '[]');
+            history.push(summaryRecord);
+            localStorage.setItem('p3_chinese_matching_records', JSON.stringify(history));
+        }
+
+        function finishGame() {
+            document.getElementById('screen-game').classList.add('hidden');
+            document.getElementById('game-stats-bar').classList.add('hidden');
+            document.getElementById('screen-summary').classList.remove('hidden');
+
+            document.getElementById('final-total-score').textContent = totalScore;
+            const scoreRate = Math.round((totalScore / 120) * 100);
+            document.getElementById('summary-score-rate').textContent = `${scoreRate}%`;
+            document.getElementById('summary-completed-count').textContent = `${completedCount} / 12`;
+            document.getElementById('summary-wrong-count').textContent = `${wrongCount} 題`;
+
+            const totalSeconds = studentRecords.reduce((acc, r) => acc + (r.response_time_seconds || 0), 0);
+            document.getElementById('summary-total-time').textContent = `${totalSeconds} 秒`;
+
+            const evalEl = document.getElementById('final-evaluation-text');
+            if (totalScore >= 110) {
+                evalEl.textContent = "🌟 太厲害了！你對第一課的中國文字詞義瞭如指掌！";
+            } else if (totalScore >= 80) {
+                evalEl.textContent = "👍 表現相當優秀！繼續保持熱情學習中文！";
+            } else {
+                evalEl.textContent = "💪 繼續加油！多重溫錯誤的詞語，下次一定會更棒！";
+            }
+
+           const reviewContainer = document.getElementById(
+    "review-words-container"
+);
+
+reviewContainer.innerHTML = "";
+
+const wrongItems = studentRecords.filter(
+    record => Number(record.total_attempts || 0) > 1
+);
+
+if (wrongItems.length === 0) {
+    reviewContainer.innerHTML = `
+        <div class="p-3 bg-emerald-50 text-emerald-800 rounded-2xl text-xs font-bold text-center">
+            🎉 太精彩了！你全部第一次便配對正確，沒有需要重溫的詞語！
+        </div>
+    `;
+} else {
+    wrongItems.forEach(record => {
+        const vocab = VOCABULARY_LIST.find(
+            item => item.word === record.target_word
+        );
+
+        if (!vocab) return;
+
+        const attemptParts = (record.attempt_words || "")
+            .split(" → ")
+            .map(item => item.replace(/^\d+\.\s*/, ""));
+
+        // 最後一個是最終正確答案，不顯示；只列出之前錯配的詞語
+        const wrongChoices = attemptParts.slice(0, -1);
+
+        const wrongChoicesText = wrongChoices.join(" → ");
+
+        const itemDiv = document.createElement("div");
+
+        itemDiv.className =
+            "bg-rose-50 border border-rose-100 p-3 rounded-2xl flex items-center justify-between text-xs";
+
+        itemDiv.innerHTML = `
+            <div class="pr-2">
+                <div class="mb-1">
+                    <span class="font-black text-rose-700 text-sm mr-2">
+                        ${vocab.word}
+                    </span>
+                    <span class="text-slate-500">
+                        共嘗試 ${record.total_attempts} 次後答啱
+                    </span>
+                </div>
+
+                <div class="text-rose-700 font-medium mb-1">
+                    你曾經配對為：${wrongChoicesText}
+                </div>
+
+                <div class="text-slate-600 leading-relaxed">
+                    ${vocab.explanation}
+                </div>
+            </div>
+
+            <button
+                onclick="speakCantonese('${vocab.word}')"
+                class="shrink-0 px-2.5 py-1 bg-white hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-full font-bold transition flex items-center gap-1"
+            >
+                🔊
+            </button>
+        `;
+
+        reviewContainer.appendChild(itemDiv);
+    });
+}
+
+            const summaryRecord = {
+                record_type: "summary",
+                nickname: studentNickname,
+                total_score: totalScore,
+                completed_count: completedCount,
+                wrong_before_count: wrongCount,
+                total_time_seconds: totalSeconds,
+                room_code: roomCode,
+                completed_at: new Date().toLocaleTimeString('zh-HK')
+            };
+
+            saveLocalSummaryRecord(summaryRecord);
+            sendToAppsScriptAndCloud(summaryRecord);
+        }
+
+        
+
+        function restartGame() {
+            document.getElementById('screen-summary').classList.add('hidden');
+            document.getElementById('screen-start').classList.remove('hidden');
+        }
+
+        function openTeacherModal() {
+            const pinModal = document.getElementById('teacher-pin-modal');
+            const pinInput = document.getElementById('input-teacher-pin');
+            const pinError = document.getElementById('pin-error-msg');
+            
+            pinInput.value = '';
+            pinError.classList.add('hidden');
+            pinModal.classList.remove('opacity-0', 'pointer-events-none');
+            setTimeout(() => pinInput.focus(), 100);
+        }
+
+        function closeTeacherPinModal() {
+            document.getElementById('teacher-pin-modal').classList.add('opacity-0', 'pointer-events-none');
+        }
+
+        function verifyTeacherPin() {
+            const pinInput = document.getElementById('input-teacher-pin').value.trim();
+            // Teacher PIN updated to 2637
+            if (pinInput === '2637') {
+                closeTeacherPinModal();
+                const teacherModal = document.getElementById('teacher-modal');
+                teacherModal.classList.remove('opacity-0', 'pointer-events-none');
+                renderTeacherTable();
+            } else {
+                document.getElementById('pin-error-msg').classList.remove('hidden');
+            }
+        }
+
+        let pendingDeleteTarget = null; // Store pending delete info { type: 'single'|'room', id: string, room: string, nickname: string }
+
+        function renderTeacherTable() {
+            const filterRoom = document.getElementById('teacher-room-filter').value.trim().toUpperCase();
+            
+            // Prefer cloud records from Firestore so all devices/times are displayed seamlessly
+            let allCloudSummaries = (window.globalCloudRecords || []).filter(r => r.record_type === 'summary');
+            let localRecords = JSON.parse(localStorage.getItem('p3_chinese_matching_records') || '[]').filter(r => r.record_type === 'summary');
+
+            // Merge local and cloud, avoiding duplicates by id or nickname+score+timestamp
+            const recordsMap = new Map();
+
+            allCloudSummaries.forEach(r => {
+                recordsMap.set(r.id || `${r.nickname}_${r.total_score}_${r.completed_at}`, r);
+            });
+
+            localRecords.forEach(r => {
+                const key = r.id || `${r.nickname}_${r.total_score}_${r.completed_at}`;
+                if (!recordsMap.has(key)) {
+                    recordsMap.set(key, r);
+                }
+            });
+
+            let history = Array.from(recordsMap.values());
+
+            if (filterRoom) {
+                history = history.filter(r => (r.room_code || '3A').toUpperCase() === filterRoom);
+            }
+
+            // Sort by score (descending) and time (ascending)
+            history.sort((a, b) => (b.total_score || 0) - (a.total_score || 0) || (a.total_time_seconds || 0) - (b.total_time_seconds || 0));
+
+            const tbody = document.getElementById('teacher-table-body');
+            tbody.innerHTML = '';
+
+            document.getElementById('teacher-stat-students').textContent = `${history.length} 人`;
+
+            if (history.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-slate-400">尚無該房間碼的學生提交紀錄。</td></tr>`;
+                document.getElementById('teacher-stat-avg-score').textContent = `0 分`;
+                document.getElementById('teacher-stat-avg-time').textContent = `0 秒`;
+                document.getElementById('teacher-stat-hardest-word').textContent = `--`;
+                return;
+            }
+
+            const totalScoresSum = history.reduce((acc, r) => acc + (r.total_score || 0), 0);
+            const totalTimesSum = history.reduce((acc, r) => acc + (r.total_time_seconds || 0), 0);
+
+            document.getElementById('teacher-stat-avg-score').textContent = `${Math.round(totalScoresSum / history.length)} 分`;
+            document.getElementById('teacher-stat-avg-time').textContent = `${Math.round(totalTimesSum / history.length)} 秒`;
+
+            history.forEach(r => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 transition";
+                const docId = r.id || '';
+                tr.innerHTML = `
+                    <td class="p-3 font-bold text-slate-800">${r.nickname}</td>
+                    <td class="p-3">${r.completed_count || 12} / 12</td>
+                    <td class="p-3 text-rose-600 font-bold">${r.wrong_before_count || 0}</td>
+                    <td class="p-3 font-black text-amber-600">${r.total_score} 分</td>
+                    <td class="p-3">${r.total_time_seconds}s</td>
+                    <td class="p-3 text-slate-400">${r.completed_at || '--'}</td>
+                    <td class="p-3 text-right flex items-center justify-end gap-1.5">
+                        <button onclick="exportSingleStudentCSV('${r.nickname}')" class="px-2 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-bold rounded-lg text-xs">
+                            CSV
+                        </button>
+                        <button onclick="confirmDeleteSingleRecord('${docId}', '${r.nickname}')" class="px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold rounded-lg text-xs">
+                            刪除
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function confirmDeleteSingleRecord(docId, nickname) {
+            pendingDeleteTarget = { type: 'single', id: docId, nickname: nickname };
+            document.getElementById('delete-modal-title').textContent = `刪除 ${nickname} 的紀錄？`;
+            document.getElementById('delete-modal-desc').textContent = "此動作將永久從雲端資料庫及本機中刪除該學生的成績。";
+            
+            const modal = document.getElementById('delete-confirm-modal');
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+        }
+
+        function confirmClearAllRoomRecords() {
+            const filterRoom = document.getElementById('teacher-room-filter').value.trim().toUpperCase() || '3A';
+            pendingDeleteTarget = { type: 'room', room: filterRoom };
+            document.getElementById('delete-modal-title').textContent = `清空【房間 ${filterRoom}】所有紀錄？`;
+            document.getElementById('delete-modal-desc').textContent = "所有屬於該房間碼的學生學習紀錄都將被清除！";
+
+            const modal = document.getElementById('delete-confirm-modal');
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+        }
+
+        function closeDeleteConfirmModal() {
+            document.getElementById('delete-confirm-modal').classList.add('opacity-0', 'pointer-events-none');
+            pendingDeleteTarget = null;
+        }
+
+        async function executeDeleteRecord() {
+            if (!pendingDeleteTarget) return;
+
+            if (pendingDeleteTarget.type === 'single') {
+                const { id, nickname } = pendingDeleteTarget;
+
+                // Delete from cloud Firestore if id exists
+                if (id && window.db && window.deleteDocRef && window.docRef) {
+                    try {
+                        const targetRef = window.docRef(window.db, 'artifacts', window.appId, 'public', 'data', 'matching_records', id);
+                        await window.deleteDocRef(targetRef);
+                    } catch (e) {
+                        console.error("Firestore delete error:", e);
+                    }
+                }
+
+                // Delete from LocalStorage
+                let local = JSON.parse(localStorage.getItem('p3_chinese_matching_records') || '[]');
+                local = local.filter(r => r.nickname !== nickname && r.id !== id);
+                localStorage.setItem('p3_chinese_matching_records', JSON.stringify(local));
+
+                // Delete from memory globalCloudRecords
+                window.globalCloudRecords = (window.globalCloudRecords || []).filter(r => r.id !== id && r.nickname !== nickname);
+
+            } else if (pendingDeleteTarget.type === 'room') {
+                const roomCodeTarget = pendingDeleteTarget.room;
+
+                // Delete all records matching roomCode from Cloud
+                const toDelete = (window.globalCloudRecords || []).filter(r => (r.room_code || '3A').toUpperCase() === roomCodeTarget);
+                for (const item of toDelete) {
+                    if (item.id && window.db && window.deleteDocRef && window.docRef) {
+                        try {
+                            const targetRef = window.docRef(window.db, 'artifacts', window.appId, 'public', 'data', 'matching_records', item.id);
+                            await window.deleteDocRef(targetRef);
+                        } catch (e) {
+                            console.error("Cloud bulk delete error:", e);
+                        }
+                    }
+                }
+
+                // Delete from LocalStorage
+                let local = JSON.parse(localStorage.getItem('p3_chinese_matching_records') || '[]');
+                local = local.filter(r => (r.room_code || '3A').toUpperCase() !== roomCodeTarget);
+                localStorage.setItem('p3_chinese_matching_records', JSON.stringify(local));
+
+                // Delete from memory
+                window.globalCloudRecords = (window.globalCloudRecords || []).filter(r => (r.room_code || '3A').toUpperCase() !== roomCodeTarget);
+            }
+
+            closeDeleteConfirmModal();
+            renderTeacherTable();
+        }
+
+        function closeTeacherModal() {
+            document.getElementById('teacher-modal').classList.add('opacity-0', 'pointer-events-none');
+        }
+
+        window.updateLiveLeaderboards = function() {
+            if (!document.getElementById('teacher-modal').classList.contains('opacity-0')) {
+                renderTeacherTable();
+            }
+        };
+
+        function downloadCSV(csvContent, filename) {
+            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function exportStudentCSV() {
+            let csv = "學生暱稱,班級房間,題號,圖片代表詞語,嘗試配對詞語,總嘗試次數,最終結果,本題得分,完成時間\n";
+            studentRecords.forEach(r => {
+                csv += `"${r.nickname}","${r.room_code}",${r.question_number},"${r.target_word}","${r.attempt_words}",${r.total_attempts},"${r.final_result}",${r.score_awarded},"${r.completed_at}"\n`;
+            });
+            downloadCSV(csv, `${studentNickname}_連連看作答紀錄.csv`);
+        }
+
+        function exportTeacherCSV() {
+            let history = JSON.parse(localStorage.getItem('p3_chinese_matching_records') || '[]');
+            let csv = "學生暱稱,班級房間,總得分,完成題數,曾拖錯題數,總耗時(秒),完成時間\n";
+            history.forEach(r => {
+                csv += `"${r.nickname}","${r.room_code}",${r.total_score},${r.completed_count || 12},${r.wrong_before_count || 0},${r.total_time_seconds},"${r.completed_at || ''}"\n`;
+            });
+            downloadCSV(csv, `全班連連看學習總紀錄.csv`);
+        }
+
+        function exportSingleStudentCSV(nickname) {
+            let history = JSON.parse(localStorage.getItem('p3_chinese_matching_records') || '[]');
+            const student = history.find(r => r.nickname === nickname);
+            let csv = "學生暱稱,班級房間,總得分,完成題數,曾拖錯題數,總耗時(秒),完成時間\n";
+            if (student) {
+                csv += `"${student.nickname}","${student.room_code}",${student.total_score},${student.completed_count || 12},${student.wrong_before_count || 0},${student.total_time_seconds},"${student.completed_at || ''}"\n`;
+            }
+            downloadCSV(csv, `${nickname}_學習總結.csv`);
+        }
+    </script>
+</body>
+</html>
